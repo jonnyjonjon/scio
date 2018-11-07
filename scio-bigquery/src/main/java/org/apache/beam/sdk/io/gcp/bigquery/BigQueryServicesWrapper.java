@@ -17,10 +17,17 @@
 
 package org.apache.beam.sdk.io.gcp.bigquery;
 
+import com.google.api.services.bigquery.model.ErrorProto;
+import com.google.api.services.bigquery.model.Job;
+import com.google.api.services.bigquery.model.JobConfigurationQuery;
+import com.google.api.services.bigquery.model.JobConfigurationTableCopy;
+import com.google.api.services.bigquery.model.JobReference;
 import com.google.api.services.bigquery.model.Table;
 import com.google.api.services.bigquery.model.TableReference;
 import com.google.api.services.bigquery.model.TableRow;
-import com.google.api.services.bigquery.model.TableSchema;
+import java.util.UUID;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposition;
+import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.PaneInfo;
@@ -61,4 +68,36 @@ public class BigQueryServicesWrapper {
         .insertAll(ref, rows, null, InsertRetryPolicy.alwaysRetry(), null);
   }
 
+  public void copyTable(TableReference source, TableReference destination, CreateDisposition createDisposition,
+                        WriteDisposition writeDisposition)
+      throws IOException, InterruptedException {
+    JobReference jobRef = new JobReference()
+        .setProjectId(source.getProjectId())
+        .setJobId(source.getProjectId() + "-" + UUID.randomUUID().toString());
+    JobConfigurationQuery queryConfig = new JobConfigurationQuery()
+        .setQuery(String.format("SELECT * FROM [%1$s:%2$s.%3$s]", source.getProjectId(), source.getDatasetId(),
+            source.getTableId()))
+        .setUseLegacySql(true)
+        .setAllowLargeResults(true)
+        .setUseQueryCache(false)
+        .setDestinationTable(destination)
+        .setCreateDisposition(createDisposition.name())
+        .setWriteDisposition(writeDisposition.name());
+    bqServices.getJobService(bqOptions).startQueryJob(jobRef, queryConfig);
+    Job job = bqServices.getJobService(bqOptions).pollJob(jobRef, Integer.MAX_VALUE);
+    ErrorProto error = job.getStatus().getErrorResult();
+    if (error != null) {
+      throw new RuntimeException(error.getMessage());
+    }
+  }
+
+  public void deleteTable(TableReference ref)
+      throws IOException, InterruptedException {
+    bqServices.getDatasetService(bqOptions).deleteTable(ref);
+  }
+
+  public boolean tableExists(TableReference ref)
+      throws IOException, InterruptedException {
+    return bqServices.getDatasetService(bqOptions).getTable(ref) != null;
+  }
 }

@@ -326,10 +326,26 @@ class BigQueryClient private (private val projectId: String,
                      writeDisposition: WriteDisposition,
                      createDisposition: CreateDisposition): Unit = {
     try {
-      if (createDisposition == CREATE_IF_NEEDED) {
-        createTable(table, schema)
+      if (writeDisposition == WRITE_TRUNCATE) {
+        // fail fast if we cannot create and the destination does not already exist
+        if (createDisposition != CREATE_IF_NEEDED && !bqService.tableExists(table)) {
+          throw new RuntimeException("put something better here")
+        }
+        // insert rows into temp table first
+        val salt = System.currentTimeMillis().toString + new Random().nextInt(1000)
+        val tempTable = table.clone().setTableId(table.getTableId + "_" + salt)
+        createTable(tempTable, schema)
+        bqService.insertAll(tempTable, rows.asJava)
+        // copy table to destination
+        bqService.copyTable(tempTable, table, createDisposition, writeDisposition)
+        // delete temp table
+        bqService.deleteTable(tempTable)
+      } else {
+        if (createDisposition == CREATE_IF_NEEDED) {
+          createTable(table, schema)
+        }
+        bqService.insertAll(table, rows.asJava)
       }
-      bqService.insertAll(table, rows.asJava)
     } finally {
       val options = PipelineOptionsFactory.create().as(classOf[GcsOptions])
       Option(options.getExecutorService).foreach(_.shutdown())
